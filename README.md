@@ -2,6 +2,14 @@
 
 **The MCP server for FL Studio (Fruity Loops): AI mixing, mix diagnosis, plugin control, piano roll and drum patterns, in plain language.**
 
+> **About this fork.** This is a fork of [rosasynthesiz/flstudio-mcp](https://github.com/rosasynthesiz/flstudio-mcp) by rosasynthesiz (MIT). Everything below is the upstream documentation; the changes in this fork are:
+>
+> - **FL Studio 21 support.** FL 21 (MIDI scripting v29) ships no Python standard library to controller scripts, so `base64` is missing and `json` may be. The controller script now falls back to small built-in stand-ins (`_MiniBase64`, `_MiniJson`) covering exactly the calls it makes, and uses the real modules when FL provides them.
+> - **`fl_read_midi_file`** — a new read-only tool. FL can't hand piano-roll notes to a script, so the workaround is: export the pattern from FL (*File > Export > MIDI file*), and the tool returns its notes in the same shape `fl_write_piano_roll_notes` accepts (paged, 500 notes per call), so the assistant can edit them and write them back. Bars always count 4 quarter notes, like the note bridge, so written-back notes land on the same tick; real time signatures are reported separately.
+> - Tests for both: `tests/test_controller_no_stdlib.py` (runs the controller with `json`/`base64` blocked) and `tests/test_midi_read.py`.
+>
+> To use this fork, clone `https://github.com/BMakx/flstudio-mcp.git` instead of the upstream URL in the Quickstart.
+
 [![PyPI](https://img.shields.io/pypi/v/fl-studio-mcp)](https://pypi.org/project/fl-studio-mcp/)
 ![status](https://img.shields.io/badge/status-beta-yellow)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -17,7 +25,7 @@
 
 `flstudio-mcp` is a Model Context Protocol (MCP) server that connects FL Studio to AI assistants: Claude Code, Claude Desktop, Cursor, Codex, or any other MCP client. Ask for a mix diagnosis, a vocal chain, a chord progression in a particular scale, or a full arrangement, and the assistant carries it out inside your open FL Studio project through FL's scripting API and a set of calibrated, safety-checked tools.
 
-- **90 tools** for the mixer, plugins, piano roll, step sequencer, patterns, playlist, routing and transport
+- **91 tools** for the mixer, plugins, piano roll, step sequencer, patterns, playlist, routing and transport
 - **One-command setup on macOS**, with no MIDI configuration
 - **Every change can be undone**, and an undo never touches a different project
 - **Windows and macOS**, FL Studio 2025 and 2026
@@ -82,6 +90,7 @@ these commands yet; use the commands above until 2.0.0 is released.
 
 ### Composition
 - **Multi-track MIDI export** — generate a complete arrangement as a standard MIDI file to import.
+- **MIDI file reading** — read the notes from a `.mid` exported from FL, ready to edit and write back to the piano roll.
 - **Multi-pattern arrangement** — create, name, clone, and mark sections.
 - **Pattern control** — list (paginated), select, rename, and read the length (beats/bars via the project PPQ) of any pattern; select and rename are single reversible steps with their own rollback.
 - **Drum patterns in the step sequencer**: read or set a channel's steps in the current pattern, e.g. `x...x...x...x...`, reversible like every other change.
@@ -94,7 +103,7 @@ these commands yet; use the commands above until 2.0.0 is released.
 - **Chords-to-MIDI** transcription of polyphonic audio (keys, piano, guitar) with Spotify's Basic Pitch, as notes for the piano roll or a `.mid` file.
 - **Drums to MIDI**: a drum loop or stem to kick, snare, clap, closed and open hi-hat, aligned to the beat, as a `.mid` or straight into the step sequencer of the channels you choose (one undo step).
 
-The server exposes 90 tools, plus 6 live resources (project, mixer, transport, channels, patterns, status) that Claude can read directly.
+The server exposes 91 tools, plus 6 live resources (project, mixer, transport, channels, patterns, status) that Claude can read directly.
 
 ## What sets it apart
 
@@ -246,7 +255,7 @@ Plain-language prompts:
 
 ## Tools
 
-90 tools, grouped by area.
+91 tools, grouped by area.
 
 ### Transport
 
@@ -350,6 +359,7 @@ All plugin tools also reach channel-rack instruments: pass `slot=-1` and the cha
 - `fl_arrange_clone_pattern` — Clone a pattern with its notes and rename the clone.
 - `fl_arrange_add_marker` — Add a named timeline marker at a bar.
 - `fl_export_midi` — Write a multi-track .mid file from an arrangement.
+- `fl_read_midi_file` — Read the notes from a .mid exported from FL, ready to edit and write back to the piano roll.
 
 ### Playlist & arrangement
 

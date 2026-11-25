@@ -14,10 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fl_studio_mcp.server import build_server  # noqa: E402
 from fastmcp import Client  # noqa: E402
 
-EXPECTED_TOOLS = 90
+EXPECTED_TOOLS = 91
 MUST_HAVE = ["fl_ping", "fl_get_project_state", "fl_write_piano_roll_notes",
              "fl_diagnose_mix", "fl_extract_melody", "fl_extract_chords",
-             "fl_export_midi", "fl_rollback_last_change", "fl_plugin_set_params"]
+             "fl_export_midi", "fl_read_midi_file", "fl_rollback_last_change",
+             "fl_plugin_set_params"]
 
 _P = _F = 0
 

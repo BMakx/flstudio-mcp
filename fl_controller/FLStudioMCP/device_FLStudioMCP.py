@@ -26,16 +26,199 @@ How FL links this script:
 Wire format: see src/fl_studio_mcp/protocol.py.
 
 Dependencies inside FL Studio:
-  - json, base64, binascii (all available -- _json, _codecs, binascii are
-    in FL's built-in module list)
+  - json, base64 when FL provides them, built-in stand-ins otherwise (FL 21)
   - NO socket, NO requests, NO pip packages, NO file I/O
 """
 
-import base64
-import json
 import math
 import sys
 import time
+
+
+# FL 21 (MIDI scripting v29) ships no Python stdlib, only built-in modules, so
+# base64 is missing and json may be. These stand-ins cover the calls used here.
+class _MiniBase64:
+    _ALPHABET = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    _INDEX = {c: i for i, c in enumerate(_ALPHABET)}
+
+    @staticmethod
+    def b64encode(data):
+        out = bytearray()
+        for i in range(0, len(data), 3):
+            chunk = data[i:i + 3]
+            pad = 3 - len(chunk)
+            n = int.from_bytes(chunk + b"\0" * pad, "big")
+            out.extend(_MiniBase64._ALPHABET[(n >> s) & 63] for s in (18, 12, 6, 0))
+            if pad:
+                out[-pad:] = b"=" * pad
+        return bytes(out)
+
+    @staticmethod
+    def b64decode(data):
+        out = bytearray()
+        acc = bits = 0
+        for c in data:
+            if c == 0x3D:   # "=" padding ends the data
+                break
+            acc = (acc << 6) | _MiniBase64._INDEX[c]
+            bits += 6
+            if bits >= 8:
+                bits -= 8
+                out.append((acc >> bits) & 0xFF)
+                acc &= (1 << bits) - 1
+        return bytes(out)
+
+
+class _MiniJson:
+    _ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r",
+                "\t": "\\t", "\b": "\\b", "\f": "\\f"}
+    _UNESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
+                  "n": "\n", "r": "\r", "t": "\t"}
+
+    @staticmethod
+    def _dump_str(s):
+        out = ['"']
+        for ch in s:
+            code = ord(ch)
+            if ch in _MiniJson._ESCAPES:
+                out.append(_MiniJson._ESCAPES[ch])
+            elif 0x20 <= code < 0x7F:
+                out.append(ch)
+            elif code > 0xFFFF:
+                code -= 0x10000
+                out.append("\\u%04x\\u%04x" % (0xD800 | (code >> 10), 0xDC00 | (code & 0x3FF)))
+            else:
+                out.append("\\u%04x" % code)
+        out.append('"')
+        return "".join(out)
+
+    @staticmethod
+    def dumps(value, **_compact_ascii_only):
+        if value is None:
+            return "null"
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        if isinstance(value, str):
+            return _MiniJson._dump_str(value)
+        if isinstance(value, int):
+            return int.__repr__(value)
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("Out of range float values are not JSON compliant")
+            return float.__repr__(value)
+        if isinstance(value, (list, tuple)):
+            return "[" + ",".join(_MiniJson.dumps(v) for v in value) + "]"
+        if isinstance(value, dict):
+            return "{" + ",".join(
+                _MiniJson._dump_str(k if isinstance(k, str) else _MiniJson.dumps(k))
+                + ":" + _MiniJson.dumps(v) for k, v in value.items()) + "}"
+        raise TypeError("Object of type %s is not JSON serializable" % type(value).__name__)
+
+    @staticmethod
+    def loads(text):
+        value, i = _MiniJson._parse(text, _MiniJson._skip(text, 0))
+        if _MiniJson._skip(text, i) != len(text):
+            raise ValueError("Extra data at %d" % i)
+        return value
+
+    @staticmethod
+    def _skip(s, i):
+        while i < len(s) and s[i] in " \t\r\n":
+            i += 1
+        return i
+
+    @staticmethod
+    def _parse(s, i):
+        ch = s[i]
+        if ch == '"':
+            return _MiniJson._parse_str(s, i + 1)
+        if ch == "{":
+            return _MiniJson._parse_object(s, i + 1)
+        if ch == "[":
+            return _MiniJson._parse_array(s, i + 1)
+        for word, value in (("true", True), ("false", False), ("null", None)):
+            if s.startswith(word, i):
+                return value, i + len(word)
+        end = i
+        while end < len(s) and s[end] in "+-0123456789.eE":
+            end += 1
+        token = s[i:end]
+        if not token:
+            raise ValueError("Unexpected character at %d" % i)
+        is_float = "." in token or "e" in token or "E" in token
+        return (float(token) if is_float else int(token)), end
+
+    @staticmethod
+    def _parse_str(s, i):
+        out = []
+        while s[i] != '"':
+            if s[i] != "\\":
+                out.append(s[i])
+                i += 1
+            elif s[i + 1] == "u":
+                code = int(s[i + 2:i + 6], 16)
+                i += 6
+                if 0xD800 <= code < 0xDC00 and s[i:i + 2] == "\\u":
+                    low = int(s[i + 2:i + 6], 16)
+                    if 0xDC00 <= low < 0xE000:
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+                        i += 6
+                out.append(chr(code))
+            else:
+                out.append(_MiniJson._UNESCAPES[s[i + 1]])
+                i += 2
+        return "".join(out), i + 1
+
+    @staticmethod
+    def _parse_array(s, i):
+        out = []
+        i = _MiniJson._skip(s, i)
+        if s[i] == "]":
+            return out, i + 1
+        while True:
+            value, i = _MiniJson._parse(s, _MiniJson._skip(s, i))
+            out.append(value)
+            i = _MiniJson._skip(s, i)
+            if s[i] == "]":
+                return out, i + 1
+            if s[i] != ",":
+                raise ValueError("Expected , at %d" % i)
+            i += 1
+
+    @staticmethod
+    def _parse_object(s, i):
+        out = {}
+        i = _MiniJson._skip(s, i)
+        if s[i] == "}":
+            return out, i + 1
+        while True:
+            i = _MiniJson._skip(s, i)
+            if s[i] != '"':
+                raise ValueError("Expected key at %d" % i)
+            key, i = _MiniJson._parse_str(s, i + 1)
+            i = _MiniJson._skip(s, i)
+            if s[i] != ":":
+                raise ValueError("Expected : at %d" % i)
+            out[key], i = _MiniJson._parse(s, _MiniJson._skip(s, i + 1))
+            i = _MiniJson._skip(s, i)
+            if s[i] == "}":
+                return out, i + 1
+            if s[i] != ",":
+                raise ValueError("Expected , at %d" % i)
+            i += 1
+
+
+try:
+    import base64
+except ImportError:
+    base64 = _MiniBase64
+
+try:
+    import json
+except ImportError:
+    json = _MiniJson
 
 # FL Studio's built-in API modules. These are NOT importable outside FL.
 import channels
@@ -1355,7 +1538,10 @@ def _h_arrange_new_pattern(p):
     it is what lets the note bridge write INTO this pattern next."""
     name = p.get("name", "PATTERN")
     try:
-        idx = patterns.findFirstNextEmptyPat()
+        # FL 21 requires flags; without this one FL prompts for a name.
+        idx = patterns.findFirstNextEmptyPat(midi.FFNEP_DontPromptName)
+        if not isinstance(idx, int) or idx < 1:
+            idx = patterns.patternNumber()   # the call selects the pattern it finds
     except Exception:
         idx = -1
     if not isinstance(idx, int) or idx < 1:

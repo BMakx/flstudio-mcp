@@ -13,7 +13,7 @@ from typing import Annotated, List, Optional
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from ..music.midi_export import write_midi
+from ..music.midi_export import read_midi, write_midi
 
 _EXPORT_DIR = os.path.join(os.path.expanduser("~"), ".flstudio-mcp", "exports")
 
@@ -63,3 +63,28 @@ def register(mcp: FastMCP) -> None:
                 "import": ("Import into FL: File > Import > MIDI file (or drag the .mid into the "
                            "playlist). Instruments are NOT auto-loaded -- assign each track to a "
                            "channel after import.")}
+
+    @mcp.tool(annotations={"title": "Read a .mid file", "readOnlyHint": True,
+                           "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+    def fl_read_midi_file(
+        path: Annotated[str, Field(description="Full path to a .mid file, e.g. one exported from FL.")],
+        start: Annotated[int, Field(ge=0, description="First note to return; pass the previous next_start to continue.")] = 0,
+    ) -> dict:
+        """Read notes from a .mid file. FL cannot hand piano-roll notes to a script,
+        so this is how to see them: the user exports the pattern from FL
+        (File > Export > MIDI file) and gives you the path. Does NOT touch FL.
+
+        Returns tracks[].notes in the shape fl_write_piano_roll_notes accepts, up
+        to 500 notes per call; next_start is set when more remain. A write-back
+        goes to the open Piano roll, so send one track at a time.
+
+        time_bars and length_bars always count 4 quarter notes as a bar, like the
+        note bridge, so notes written back keep their position. In other time
+        signatures they are NOT the bar numbers FL shows; see time_signatures."""
+        if not os.path.isfile(path):
+            return {"ok": False, "error": "file not found: %s" % path}
+        try:
+            return {"ok": True, "path": path, **read_midi(path, start)}
+        except Exception as e:
+            return {"ok": False, "path": path,
+                    "error": "not a readable MIDI file: %s: %s" % (type(e).__name__, e)}
